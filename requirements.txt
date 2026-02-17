@@ -2,3 +2,5 @@ requests
 telepot
 flask
 numpy
+pandas
+matplotlib

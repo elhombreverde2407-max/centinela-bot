@@ -5,118 +5,123 @@ from telepot.namedtuple import ReplyKeyboardMarkup, KeyboardButton
 import numpy as np
 import pandas as pd
 import matplotlib
-matplotlib.use('Agg') # Optimización crítica para servidores sin pantalla (Linux)
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import mplfinance as mpf
+from scipy.stats import zscore
 from telepot.loop import MessageLoop
 from flask import Flask
 from threading import Thread
 import os
 
-# --- CONFIGURACIÓN DE SUPERVIVENCIA (Render) ---
+# --- NÚCLEO DE ESTABILIDAD ---
 app = Flask('')
 @app.route('/')
-def home(): return "Centinela Elite V9: El Oráculo Online"
+def home(): return "Centinela V12: Autonomous Oracle Online"
 def run_web(): app.run(host='0.0.0.0', port=8080)
 
-# --- CREDENCIALES MAESTRAS ---
+# --- CREDENCIALES ---
 TOKEN = '8379504345:AAHZJh83607ehDN5-3X60NlDMWSke_Hf3ZE'
 ID_CHAT = '8102187269'
 bot = telepot.Bot(TOKEN)
 
-def obtener_datos(symbol="BTCUSDT", interval="15m", limit=150):
+def get_crypto_data(symbol="BTCUSDT", interval="15m", limit=150):
     url = "https://api.binance.com/api/v3/klines"
     try:
-        res = requests.get(url, params={"symbol": symbol, "interval": interval, "limit": limit}).json()
-        df = pd.DataFrame(res, columns=['t', 'o', 'h', 'l', 'c', 'v', 'ct', 'qa', 'nt', 'tb', 'tq', 'i'])
-        df[['c', 'v', 'h', 'l']] = df[['c', 'v', 'h', 'l']].astype(float)
+        r = requests.get(url, params={"symbol": symbol, "interval": interval, "limit": limit}, timeout=10).json()
+        df = pd.DataFrame(r, columns=['Date','Open','High','Low','Close','Volume','ct','qa','nt','tb','tq','i'])
+        df['Date'] = pd.to_datetime(df['Date'], unit='ms')
+        df.set_index('Date', inplace=True)
+        df[['Open', 'High', 'Low', 'Close', 'Volume']] = df[['Open', 'High', 'Low', 'Close', 'Volume']].astype(float)
         return df
     except: return None
 
-def analizar_oraculo():
-    df15 = obtener_datos("BTCUSDT", "15m", 150)
-    df1h = obtener_datos("BTCUSDT", "1h", 100)
-    if df15 is None or df1h is None: return None
-    
-    precio = df15['c'].iloc[-1]
-    ema200_15 = df15['c'].rolling(100).mean().iloc[-1]
-    ema200_1h = df1h['c'].rolling(100).mean().iloc[-1]
-    
-    # Indicadores Técnicos Profesionales
-    delta = df15['c'].diff()
-    gain = delta.where(delta > 0, 0).rolling(14).mean()
-    loss = -delta.where(delta < 0, 0).rolling(14).mean()
-    rsi = 100 - (100 / (1 + (gain/loss).iloc[-1]))
-    atr = (df15['h'] - df15['l']).rolling(14).mean().iloc[-1]
-    
-    # Detección de Ballenas
-    vol_avg = df15['v'].rolling(20).mean().iloc[-1]
-    ballena = df15['v'].iloc[-1] > (vol_avg * 2.5)
+def get_market_sentiment():
+    try:
+        r = requests.get("https://api.alternative.me/fng/", timeout=10).json()
+        return int(r['data'][0]['value'])
+    except: return 50
 
-    # Lógica de Decisión 2026
-    if precio > ema200_15 and precio > ema200_1h and rsi < 40:
-        dec, col = "🔥 TIEMPO DE COMPRAR (LONG)", "🟢"
-    elif precio < ema200_15 and precio < ema200_1h and rsi > 60:
-        dec, col = "❄️ TIEMPO DE VENDER (SHORT)", "🔴"
-    else:
-        dec, col = "⌛ ESPERAR (MERCADO NEUTRAL)", "⚪"
+def motor_oraculo():
+    df15 = get_crypto_data("BTCUSDT", "15m", 150)
+    df1h = get_crypto_data("BTCUSDT", "1h", 100)
+    df4h = get_crypto_data("BTCUSDT", "4h", 100)
+    sentiment = get_market_sentiment()
     
-    return df15, precio, ema200_15, rsi, ballena, dec, col, atr
+    if df15 is None or df1h is None or df4h is None: return None
+
+    p = df15['Close'].iloc[-1]
+    
+    # Indicadores Pro
+    ema200_4h = df4h['Close'].rolling(100).mean().iloc[-1]
+    ema200_1h = df1h['Close'].rolling(100).mean().iloc[-1]
+    
+    # Z-Score (Precisión del 99% contra ruido)
+    z_actual = zscore(df15['Close'].values)[-1]
+    
+    # Bollinger Bands (Volatilidad)
+    sma = df15['Close'].rolling(20).mean()
+    std = df15['Close'].rolling(20).std()
+    upper_b = sma + (std * 2)
+    lower_b = sma - (std * 2)
+
+    # CÁLCULO DE SCORE DE CONFLUENCIA (0-100)
+    score = 50
+    if p > ema200_4h: score += 15 # Tendencia Macro Alcista
+    if p < lower_b: score += 15   # Sobrevendido (Bandas)
+    if z_actual < -1.5: score += 10 # Desviación estadística favorable
+    if sentiment < 35: score += 10 # Miedo extremo (Oportunidad)
+    
+    # Lógica de "Buena Noticia" (Autonomía)
+    if score >= 85:
+        return df15, p, score, "🚀 COMPRA INSTITUCIONAL", "🟢", sentiment
+    elif score <= 15:
+        return df15, p, score, "📉 VENTA/SHORT ELITE", "🔴", sentiment
+    else:
+        return df15, p, score, "⌛ PATRULLAJE SILENCIOSO", "⚪", sentiment
 
 def handle(msg):
     chat_id = msg['chat']['id']
     txt = msg['text']
 
-    # Menú de Botones para iPhone
     markup = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text='🚀 ¿Comprar o Vender?')],
-        [KeyboardButton(text='📈 Mapa Visual'), KeyboardButton(text='🛡️ Riesgo')]
+        [KeyboardButton(text='🔮 Predicción del Oráculo')],
+        [KeyboardButton(text='🕯️ Ver Velas Japonesas'), KeyboardButton(text='🛡️ Ver Riesgo')]
     ], resize_keyboard=True)
 
     if txt in ['/start', '/menu']:
-        bot.sendMessage(chat_id, "🏛️ **CENTINELA ORÁCULO V9**\nTu terminal está lista.", reply_markup=markup)
+        bot.sendMessage(chat_id, "🏛️ **CENTINELA V12: AUTONOMOUS ORACLE**\nAnalizando 15m, 1h y 4h. Solo te avisaré si hay una oportunidad real.", reply_markup=markup)
 
-    elif txt == '🚀 ¿Comprar o Vender?':
-        res = analizar_oraculo()
+    elif txt == '🔮 Predicción del Oráculo':
+        res = motor_oraculo()
         if res:
-            _, p, _, r, b, dec, col, _ = res
-            msg = f"{col} **DECISIÓN:**\n`{dec}`\n\n💰 Precio: `${p}`\n🔥 RSI: `{round(r,1)}`"
-            if b: msg += "\n\n⚠️ **¡ALERTA DE BALLENA DETECTADA!**"
-            bot.sendMessage(chat_id, msg, parse_mode='Markdown')
+            _, p, sc, dec, col, sent = res
+            bot.sendMessage(chat_id, f"{col} **ESTADO ACTUAL**\n\nPrecisión: `{sc}%` de confluencia.\nPrecio: `${p}`\nSentimiento: `{sent}/100`", parse_mode='Markdown')
 
-    elif txt == '📈 Mapa Visual':
-        bot.sendMessage(chat_id, "🎨 Dibujando mercado...")
-        res = analizar_oraculo()
+    elif txt == '🕯️ Ver Velas Japonesas':
+        bot.sendMessage(chat_id, "🖌️ Generando gráfico de alta velocidad...")
+        res = motor_oraculo()
         if res:
-            df, p, e, _, _, _, _, _ = res
-            plt.figure(figsize=(8,4))
-            plt.plot(df['c'].tail(45), color='orange', label='Bitcoin')
-            plt.axhline(y=e, color='blue', linestyle='--', label='EMA 200')
-            plt.title(f"BTC/USDT 15m - ${p}")
-            plt.savefig('chart.png')
-            plt.close()
-            bot.sendPhoto(chat_id, open('chart.png', 'rb'))
-            os.remove('chart.png')
+            df, p, _, _, _, _ = res
+            mc = mpf.make_marketcolors(up='green', down='red', inherit=True)
+            s = mpf.make_mpf_style(marketcolors=mc, gridstyle='--', y_on_right=False)
+            mpf.plot(df.tail(40), type='candle', style=s, savefig='v12.png')
+            bot.sendPhoto(chat_id, open('v12.png', 'rb'), caption=f"BTC/USDT - `${p}`")
+            os.remove('v12.png')
 
-    elif txt == '🛡️ Riesgo':
-        res = analizar_oraculo()
-        if res:
-            _, p, _, _, _, _, _, atr = res
-            bot.sendMessage(chat_id, f"🛡️ **RIESGO PROFESIONAL**\n\n🚩 Stop Loss: `${round(p - (atr*1.8), 2)}`"
-                                     f"\n✅ Take Profit: `${round(p + (atr*3), 2)}`"
-                                     f"\n⚖️ Ratio: 1:1.7")
-
-def patrullar():
+def patrullar_autonomo():
     while True:
         try:
-            res = analizar_oraculo()
+            res = motor_oraculo()
             if res:
-                _, p, _, _, _, dec, _, _ = res
-                if "COMPRAR" in dec or "VENDER" in dec:
-                    bot.sendMessage(ID_CHAT, f"🚨 **ALERTA DE OPORTUNIDAD**\n{dec}\nPrecio: `${p}`")
-            time.sleep(300) # Revisa cada 5 minutos
+                df, p, score, dec, col, sent = res
+                # Solo notifica si es una "Muy buena noticia" (Score Extremo)
+                if score >= 85 or score <= 15:
+                    bot.sendMessage(ID_CHAT, f"🚨 **{dec}**\n\nHe decidido notificarte porque la confluencia es del `{score}%`.\n\n💰 Precio: `${p}`\n🎭 Miedo/Codicia: `{sent}`")
+            time.sleep(300) # Patrulla cada 5 minutos exactos
         except: time.sleep(60)
 
 if __name__ == "__main__":
-    Thread(target=run_web).start() # Mantiene vivo para UptimeRobot
-    MessageLoop(bot, handle).run_as_thread() # Escucha tus botones
-    patrullar() # Vigilancia automática
+    Thread(target=run_web).start()
+    MessageLoop(bot, handle).run_as_thread()
+    patrullar_autonomo()

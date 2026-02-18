@@ -17,10 +17,10 @@ from threading import Thread
 # --- NÚCLEO DE ESTABILIDAD ---
 app = Flask('')
 @app.route('/')
-def home(): return "Centinela Quantum V15 Online"
+def home(): return "Centinela V17 Quantum Apex Online"
 def run_web(): app.run(host='0.0.0.0', port=8080)
 
-# --- CREDENCIALES SEGURAS (Desde el cofre de Render) ---
+# --- SEGURIDAD (Variables de Render) ---
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 ID_CHAT = os.environ.get('CHAT_ID')
 bot = telepot.Bot(TOKEN)
@@ -36,80 +36,73 @@ def fetch_data(symbol="BTCUSDT", interval="15m", limit=150):
         return df
     except: return None
 
-def analizar_quantum():
+def detectar_patrones(df):
+    # Detecta martillos o velas envolventes (Señales de giro pro)
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    cuerpo = abs(last['Close'] - last['Open'])
+    mecha_inf = last['Open'] - last['Low'] if last['Close'] > last['Open'] else last['Close'] - last['Low']
+    es_martillo = mecha_inf > (cuerpo * 2)
+    es_envolvente = last['Close'] > prev['Open'] and prev['Close'] < prev['Open'] if last['Close'] > last['Open'] else False
+    return es_martillo or es_envolvente
+
+def motor_apex_v17():
     df15 = fetch_data("BTCUSDT", "15m", 150)
-    df1h = fetch_data("BTCUSDT", "1h", 100)
     df4h = fetch_data("BTCUSDT", "4h", 100)
-    if df15 is None or df1h is None or df4h is None: return None
+    if df15 is None or df4h is None: return None
 
     p = df15['Close'].iloc[-1]
     ema200 = df4h['Close'].rolling(100).mean().iloc[-1]
-    z_actual = zscore(df15['Close'].values)[-1]
+    z = zscore(df15['Close'].values)[-1]
+    
+    # Análisis de Volatilidad (Filtro de Noticias)
     atr = (df15['High'] - df15['Low']).rolling(14).mean().iloc[-1]
-    sop = df4h['Low'].tail(20).min()
-    resis = df4h['High'].tail(20).max()
-
+    volatilidad_extrema = abs(df15['Close'].diff().iloc[-1]) > (atr * 2.5) # Posible noticia
+    
+    # Inteligencia de Confluencia
     score = 50
-    if p > ema200: score += 20
-    if z_actual < -1.8: score += 20
+    if p > ema200: score += 15
+    if z < -1.8: score += 20
+    if detectar_patrones(df15.tail(5)): score += 15
     
-    if score >= 90: dec, col = "🚀 COMPRA INSTITUCIONAL", "🟢"
-    elif score <= 10: dec, col = "📉 VENTA ELITE (SHORT)", "🔴"
-    else: dec, col = "⌛ MERCADO NEUTRAL", "⚪"
-    
-    return df15, p, score, dec, col, atr, sop, resis
+    tiempo = "5-10 min" if abs(z) > 1.5 else "20-40 min"
+    return p, score, z, volatilidad_extrema, tiempo, atr
 
 def handle(msg):
     chat_id = msg['chat']['id']
-    txt = msg['text']
-    
-    # Menú de Botones Profesional
-    markup = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text='🎯 Escaneo Quantum')],
-        [KeyboardButton(text='📈 Ver Velas Japonesas'), KeyboardButton(text='🛡️ Riesgo/Soporte')]
-    ], resize_keyboard=True)
+    if msg['text'] in ['/start', '/menu']:
+        markup = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text='🎯 Escaneo Apex')], [KeyboardButton(text='🕯️ Velas Japonesas')]], resize_keyboard=True)
+        bot.sendMessage(chat_id, "🏛️ **CENTINELA V17: APEX AI**\nSistema de pre-aviso y noticias activo.", reply_markup=markup)
 
-    if txt in ['/start', '/menu']:
-        bot.sendMessage(chat_id, "🏛️ **CENTINELA QUANTUM V15**\nSistema autónomo activo y protegido.", reply_markup=markup)
-    
-    elif txt == '🎯 Escaneo Quantum':
-        res = analizar_quantum()
-        if res:
-            _, p, sc, dec, col, _, _, _ = res
-            bot.sendMessage(chat_id, f"{col} **ANÁLISIS:**\n`{dec}`\n\n💰 Precio: `${p}`\n🎯 Confluencia: `{sc}%`", parse_mode='Markdown')
-
-    elif txt == '📈 Ver Velas Japonesas':
-        bot.sendMessage(chat_id, "🖌️ Generando gráfico institucional...")
-        res = analizar_quantum()
-        if res:
-            df, p, _, _, _, _, s, r = res
-            mc = mpf.make_marketcolors(up='green', down='red', inherit=True)
-            style = mpf.make_mpf_style(marketcolors=mc, gridstyle='--', y_on_right=False)
-            mpf.plot(df.tail(40), type='candle', style=style, hlines=dict(hlines=[s, r], colors=['g', 'r'], alpha=0.5), savefig='v15.png')
-            bot.sendPhoto(chat_id, open('v15.png', 'rb'), caption=f"BTC/USDT - `${p}`")
-            os.remove('v15.png')
-
-    elif txt == '🛡️ Riesgo/Soporte':
-        res = analizar_quantum()
-        if res:
-            _, p, _, _, _, atr, s, r = res
-            msg = (f"🛡️ **GESTIÓN PROFESIONAL**\n\n🟢 Soporte: `${s}`\n🔴 Resistencia: `${r}`"
-                   f"\n\n🚩 Stop Loss: `${round(p - (atr*2), 2)}`"
-                   f"\n✅ Take Profit: `${round(p + (atr*3), 2)}`")
-            bot.sendMessage(chat_id, msg)
-
-def patrullar():
+def patrullar_autonomo():
+    pre_aviso_dado = False
     while True:
         try:
-            res = analizar_quantum()
-            if res:
-                _, p, score, dec, col, _, _, _ = res
-                if score >= 90 or score <= 10:
-                    bot.sendMessage(ID_CHAT, f"🚨 **ALERTA RELEVANTE**\n{dec}\n💰 Entrada: `${p}`")
-            time.sleep(300)
+            p, score, z, noticia, t, atr = motor_apex_v17()
+            
+            # 1. FILTRO DE NOTICIAS (Autonomía ante volatilidad)
+            if noticia:
+                bot.sendMessage(ID_CHAT, "⚠️ **ADVERTENCIA DE VOLATILIDAD**: Se detecta movimiento brusco (posible noticia). El bot filtrará señales para evitar riesgos.")
+            
+            # 2. PRE-AVISO (5-10 min antes)
+            if (82 <= score < 90 or 10 < score <= 18) and not pre_aviso_dado:
+                bot.sendMessage(ID_CHAT, f"🟡 **PRE-AVISO CHRONOS (5 min)**\n\nOportunidad gestándose.\n💰 Precio: `${p}`\n🎯 Confluencia: `{score}%` \n⏳ Ventana: `{t}`")
+                pre_aviso_dado = True
+
+            # 3. NOTIFICACIÓN RELEVANTE (Ejecución)
+            elif score >= 90 or score <= 10:
+                msj = (f"🚨 **¡EJECUCIÓN INMEDIATA!**\n\nConfluencia Apex del `{score}%`.\n💰 Entrada: `${p}`"
+                       f"\n🚩 SL: `${round(p - (atr*2), 2) if score > 50 else round(p + (atr*2), 2)}`"
+                       f"\n✅ TP: `${round(p + (atr*3), 2) if score > 50 else round(p - (atr*3), 2)}`")
+                bot.sendMessage(ID_CHAT, msj)
+                pre_aviso_dado = False
+
+            elif 45 < score < 55: pre_aviso_dado = False
+            
+            time.sleep(300) # Coincide con UptimeRobot
         except: time.sleep(60)
 
 if __name__ == "__main__":
     Thread(target=run_web).start()
     MessageLoop(bot, handle).run_as_thread()
-    patrullar()
+    patrullar_autonomo()

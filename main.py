@@ -1,104 +1,122 @@
 import requests
 import time
 import telepot
+from telepot.namedtuple import ReplyKeyboardMarkup, KeyboardButton
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg') # Optimización crítica para servidores sin pantalla (Linux)
 import matplotlib.pyplot as plt
 from telepot.loop import MessageLoop
 from flask import Flask
 from threading import Thread
 import os
 
-# --- NÚCLEO ---
+# --- CONFIGURACIÓN DE SUPERVIVENCIA (Render) ---
 app = Flask('')
 @app.route('/')
-def home(): return "Centinela Elite V6 Online"
+def home(): return "Centinela Elite V9: El Oráculo Online"
 def run_web(): app.run(host='0.0.0.0', port=8080)
 
+# --- CREDENCIALES MAESTRAS ---
 TOKEN = '8379504345:AAHZJh83607ehDN5-3X60NlDMWSke_Hf3ZE'
 ID_CHAT = '8102187269'
 bot = telepot.Bot(TOKEN)
 
-def obtener_datos_master():
+def obtener_datos(symbol="BTCUSDT", interval="15m", limit=150):
     url = "https://api.binance.com/api/v3/klines"
-    res = requests.get(url, params={"symbol": "BTCUSDT", "interval": "15m", "limit": 100}).json()
-    df = pd.DataFrame(res, columns=['time', 'open', 'high', 'low', 'close', 'vol', 'close_time', 'qav', 'num_trades', 'taker_base', 'taker_quote', 'ignore'])
-    df['close'] = df['close'].astype(float)
-    df['vol'] = df['vol'].astype(float)
-    
-    precio = df['close'].iloc[-1]
-    ema200 = df['close'].rolling(100).mean().iloc[-1]
-    vol_promedio = df['vol'].rolling(20).mean().iloc[-1]
-    es_ballena = df['vol'].iloc[-1] > (vol_promedio * 3.0) # Radar de Ballenas x3
-    
-    # RSI y ATR
-    diff = df['close'].diff()
-    gain = diff.where(diff > 0, 0).rolling(14).mean()
-    loss = -diff.where(diff < 0, 0).rolling(14).mean()
-    rsi = 100 - (100 / (1 + (gain/loss).iloc[-1]))
-    atr = (df['close'].max() - df['close'].min()) / 20 # Simulación ATR
-    
-    return df, precio, ema200, rsi, es_ballena, precio - (atr*2), precio + (atr*3)
+    try:
+        res = requests.get(url, params={"symbol": symbol, "interval": interval, "limit": limit}).json()
+        df = pd.DataFrame(res, columns=['t', 'o', 'h', 'l', 'c', 'v', 'ct', 'qa', 'nt', 'tb', 'tq', 'i'])
+        df[['c', 'v', 'h', 'l']] = df[['c', 'v', 'h', 'l']].astype(float)
+        return df
+    except: return None
 
-def enviar_grafica(chat_id):
-    df, p, e, r, b, sl, tp = obtener_datos_master()
-    plt.figure(figsize=(10,5))
-    plt.plot(df['close'].tail(50), label='Precio BTC', color='#F7931A', linewidth=2)
-    plt.axhline(y=e, color='blue', linestyle='--', label='EMA 200 (Tendencia)')
-    plt.title(f"Análisis Centinela - Precio Actual: ${p}")
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    plt.savefig('chart.png')
-    plt.close()
-    bot.sendPhoto(chat_id, open('chart.png', 'rb'))
-    os.remove('chart.png')
+def analizar_oraculo():
+    df15 = obtener_datos("BTCUSDT", "15m", 150)
+    df1h = obtener_datos("BTCUSDT", "1h", 100)
+    if df15 is None or df1h is None: return None
+    
+    precio = df15['c'].iloc[-1]
+    ema200_15 = df15['c'].rolling(100).mean().iloc[-1]
+    ema200_1h = df1h['c'].rolling(100).mean().iloc[-1]
+    
+    # Indicadores Técnicos Profesionales
+    delta = df15['c'].diff()
+    gain = delta.where(delta > 0, 0).rolling(14).mean()
+    loss = -delta.where(delta < 0, 0).rolling(14).mean()
+    rsi = 100 - (100 / (1 + (gain/loss).iloc[-1]))
+    atr = (df15['h'] - df15['l']).rolling(14).mean().iloc[-1]
+    
+    # Detección de Ballenas
+    vol_avg = df15['v'].rolling(20).mean().iloc[-1]
+    ballena = df15['v'].iloc[-1] > (vol_avg * 2.5)
+
+    # Lógica de Decisión 2026
+    if precio > ema200_15 and precio > ema200_1h and rsi < 40:
+        dec, col = "🔥 TIEMPO DE COMPRAR (LONG)", "🟢"
+    elif precio < ema200_15 and precio < ema200_1h and rsi > 60:
+        dec, col = "❄️ TIEMPO DE VENDER (SHORT)", "🔴"
+    else:
+        dec, col = "⌛ ESPERAR (MERCADO NEUTRAL)", "⚪"
+    
+    return df15, precio, ema200_15, rsi, ballena, dec, col, atr
 
 def handle(msg):
     chat_id = msg['chat']['id']
-    txt = msg['text'].lower()
+    txt = msg['text']
+
+    # Menú de Botones para iPhone
+    markup = ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text='🚀 ¿Comprar o Vender?')],
+        [KeyboardButton(text='📈 Mapa Visual'), KeyboardButton(text='🛡️ Riesgo')]
+    ], resize_keyboard=True)
 
     if txt in ['/start', '/menu']:
-        msj = ("🏦 **ESTACIÓN ELITE PUEBLA 2026**\n\n"
-               "/reporte - Datos en tiempo real\n"
-               "/grafica - Generar mapa visual\n"
-               "/riesgo - Niveles de protección\n"
-               "/sugerencia - Estrategia agresiva")
-        bot.sendMessage(chat_id, msj)
-    
-    elif txt == '/grafica':
-        bot.sendMessage(chat_id, "⌛ Generando gráfica institucional...")
-        enviar_grafica(chat_id)
+        bot.sendMessage(chat_id, "🏛️ **CENTINELA ORÁCULO V9**\nTu terminal está lista.", reply_markup=markup)
 
-    elif txt == '/riesgo':
-        p, e, r, b, sl, tp = obtener_datos_master()[1:]
-        msj = (f"🛡️ **GESTIÓN DE RIESGO**\n\n"
-               f"🚩 Stop Loss sugerido: `${round(sl, 2)}`"
-               f"\n✅ Take Profit sugerido: `${round(tp, 2)}`"
-               f"\n⚠️ Riesgo: 1% de tu capital máximo por operación.")
-        bot.sendMessage(chat_id, msj)
+    elif txt == '🚀 ¿Comprar o Vender?':
+        res = analizar_oraculo()
+        if res:
+            _, p, _, r, b, dec, col, _ = res
+            msg = f"{col} **DECISIÓN:**\n`{dec}`\n\n💰 Precio: `${p}`\n🔥 RSI: `{round(r,1)}`"
+            if b: msg += "\n\n⚠️ **¡ALERTA DE BALLENA DETECTADA!**"
+            bot.sendMessage(chat_id, msg, parse_mode='Markdown')
 
-    elif txt == '/sugerencia':
-        p, e, r, b, sl, tp = obtener_datos_master()[1:]
-        if p > e and r < 38:
-            txt_s = f"🔥 **ORDEN AGRESIVA:** Compra inmediata. Confluencia alcista detectada. Entrada: `${p}`"
-        elif p < e and r > 62:
-            txt_s = f"🧊 **ORDEN AGRESIVA:** Venta/Short. Tendencia bajista confirmada. Entrada: `${p}`"
-        else:
-            txt_s = "⌛ **ESTADO:** Sin confluencia clara. Las ballenas están laterales. Mantente fuera."
-        bot.sendMessage(chat_id, txt_s)
+    elif txt == '📈 Mapa Visual':
+        bot.sendMessage(chat_id, "🎨 Dibujando mercado...")
+        res = analizar_oraculo()
+        if res:
+            df, p, e, _, _, _, _, _ = res
+            plt.figure(figsize=(8,4))
+            plt.plot(df['c'].tail(45), color='orange', label='Bitcoin')
+            plt.axhline(y=e, color='blue', linestyle='--', label='EMA 200')
+            plt.title(f"BTC/USDT 15m - ${p}")
+            plt.savefig('chart.png')
+            plt.close()
+            bot.sendPhoto(chat_id, open('chart.png', 'rb'))
+            os.remove('chart.png')
+
+    elif txt == '🛡️ Riesgo':
+        res = analizar_oraculo()
+        if res:
+            _, p, _, _, _, _, _, atr = res
+            bot.sendMessage(chat_id, f"🛡️ **RIESGO PROFESIONAL**\n\n🚩 Stop Loss: `${round(p - (atr*1.8), 2)}`"
+                                     f"\n✅ Take Profit: `${round(p + (atr*3), 2)}`"
+                                     f"\n⚖️ Ratio: 1:1.7")
 
 def patrullar():
     while True:
         try:
-            df, p, e, r, b, sl, tp = obtener_datos_master()
-            if b: # ALERTA DE BALLENAS
-                bot.sendMessage(ID_CHAT, f"🐋 **RADAR DE BALLENAS:** ¡Volumen masivo detectado! Movimiento institucional inminente en `${p}`.")
-            if p > e and r < 32:
-                bot.sendMessage(ID_CHAT, f"🚨 **SEÑAL ELITE:** Compra en soporte con RSI bajo.\nPrecio: `${p}`")
-            time.sleep(300)
+            res = analizar_oraculo()
+            if res:
+                _, p, _, _, _, dec, _, _ = res
+                if "COMPRAR" in dec or "VENDER" in dec:
+                    bot.sendMessage(ID_CHAT, f"🚨 **ALERTA DE OPORTUNIDAD**\n{dec}\nPrecio: `${p}`")
+            time.sleep(300) # Revisa cada 5 minutos
         except: time.sleep(60)
 
 if __name__ == "__main__":
-    Thread(target=run_web).start()
-    MessageLoop(bot, handle).run_as_thread()
-    patrullar()
+    Thread(target=run_web).start() # Mantiene vivo para UptimeRobot
+    MessageLoop(bot, handle).run_as_thread() # Escucha tus botones
+    patrullar() # Vigilancia automática
